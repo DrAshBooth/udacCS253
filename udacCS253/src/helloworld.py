@@ -27,7 +27,7 @@ class BaseHandler(webapp2.RequestHandler):
     def write(self, *a, **kw):
         self.response.out.write(*a, **kw)
         
-class MainPage(webapp2.RequestHandler):
+class MainPage(webapp2.RequestHandler): 
     def write_form(self):
         self.response.out.write("Main Page")
 
