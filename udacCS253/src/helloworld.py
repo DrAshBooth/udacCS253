@@ -38,6 +38,30 @@ class MainPage(webapp2.RequestHandler):
         the_string = self.request.get('text')
         self.write_form(the_string)
         
+class Artwork(db.Model):
+    title = db.StringProperty(required=True)
+    art = db.TextProperty(required=True)
+    created = db.DateTimeProperty(auto_now_add=True)
+        
+class AsciiFront(BaseHandler): 
+    def render_front(self, title="", art="",error=""):
+        arts = db.GqlQuery("SELECT * FROM Artwork ORDER BY created DESC")
+        self.render("ascii-chan-frontpage.html", title=title, art=art, error=error, arts=arts)
+        
+    def get(self):
+        self.render_front()
+        
+    def post(self):
+        title = self.request.get("title")
+        art = self.request.get("art")
+        if title and art:
+            a = Artwork(title=title, art=art)
+            a.put()
+            self.redirect("/unit2/asciichan")
+        else:
+            error = "Must enter both a title ad some artwork!"
+            self.render_front(title, art, error)
+        
 class Rot13Handler(BaseHandler):
     def get(self):
         self.render('rot13-form.html')
@@ -114,6 +138,7 @@ class Welcome(BaseHandler):
             self.redirect('/unit2/signup')
 
 app = webapp2.WSGIApplication([('/', MainPage),
+                               ('/unit2/asciichan', AsciiFront),
                                ('/unit2/rot13', Rot13Handler),
                                ('/unit2/signup', Signup),
                                ('/unit2/welcome', Welcome)],
@@ -124,34 +149,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-    
-# months = ['January',
-#          'February',
-#          'March',
-#          'April',
-#          'May',
-#          'June',
-#          'July',
-#          'August',
-#          'September',
-#          'October',
-#          'November',
-#          'December']
-#                     
-# def valid_month(month):
-#    if month:
-#        cap_month = month.capitalize()
-#        if cap_month in months:
-#            return cap_month
-#
-# def valid_day(day):
-#    if day and day.isdigit():
-#        day = int(day)
-#        if day > 0 and day <= 31:
-#            return day
-#            
-# def valid_year(year):
-#    if year and year.isdigit():
-#        year = int(year)
-#        if year > 1900 and year < 2020:
-#            return year
