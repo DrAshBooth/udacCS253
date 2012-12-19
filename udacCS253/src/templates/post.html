@@ -1,0 +1,16 @@
+<!DOCTYPE html PUBLIC "-//W3C//DTD HTML 4.01 Transitional//EN" "http://www.w3.org/TR/html4/loose.dtd">
+
+<div class="post">
+	<div class="post-heading">
+		<div class="post-tile">
+			{{p.subject}}
+		</div>
+		
+		<div class="post-date">
+			{{p.created.strftime("%b %d, %Y")}}
+		</div>
+	</div>
+	<div class ="post-content">
+		{{p._render_text | safe}}
+	</div>
+</div>

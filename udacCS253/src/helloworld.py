@@ -16,6 +16,10 @@ template_dir = os.path.join(os.path.dirname(__file__), 'templates')
 jinja_env = jinja2.Environment(loader=jinja2.FileSystemLoader(template_dir),
                                autoescape=True)
 
+def render_str(template, **params):
+        t = jinja_env.get_template(template)
+        return t.render(params)
+
 class BaseHandler(webapp2.RequestHandler):
     def render_str(self, template, **params):
         t = jinja_env.get_template(template)
@@ -44,7 +48,7 @@ class Artwork(db.Model):
     created = db.DateTimeProperty(auto_now_add=True)
         
 class AsciiFront(BaseHandler): 
-    def render_front(self, title="", art="",error=""):
+    def render_front(self, title="", art="", error=""):
         arts = db.GqlQuery("SELECT * FROM Artwork ORDER BY created DESC")
         self.render("ascii-chan-frontpage.html", title=title, art=art, error=error, arts=arts)
         
@@ -61,6 +65,54 @@ class AsciiFront(BaseHandler):
         else:
             error = "Must enter both a title ad some artwork!"
             self.render_front(title, art, error)
+            
+class Post(db.Model):
+    subject = db.StringProperty(required=True)
+    content = db.TextProperty(required=True)
+    created = db.DateTimeProperty(auto_now_add=True)
+    last_modified = db.DateTimeProperty(auto_now=True)
+    
+    def render(self):
+        self._render_text = self.content.replace('\n', '<br>')
+        return render_str("post.html", p=self)
+    
+def blog_key(name="default"):
+    return db.Key.from_path('blogs', name)
+            
+class BlogFront(BaseHandler): 
+    def render_front(self):
+        posts = db.GqlQuery("SELECT * FROM Post ORDER BY created DESC limit 10")
+        self.render("blog-frontpage.html", posts=posts)
+        
+    def get(self):
+        self.render_front()
+        
+class PostPage(BaseHandler):
+    def get(self, post_id):
+        key = db.Key.from_path('Post', int(post_id), parent=blog_key())
+        post = db.get(key)
+        if not post:
+            self.error(404)
+            return
+        self.render("permalink.html", p=post)
+
+class NewPostBlog(BaseHandler):
+    def render_form(self, subject="", content="", error=""):
+        self.render("blog-newpost.html", subject=subject, content=content, error=error)
+    
+    def get(self):
+        self.render_form()
+    
+    def post(self):
+        subject = self.request.get("subject")
+        content = self.request.get("content")
+        if subject and content:
+            b = Post(parent=blog_key(), subject=subject, content=content)
+            b.put()
+            self.redirect('/unit2/blog/' + str(b.key().id()))
+        else:
+            error = "Must enter both subject and content please!"
+            self.render_form(subject, content, error)
         
 class Rot13Handler(BaseHandler):
     def get(self):
@@ -138,6 +190,9 @@ class Welcome(BaseHandler):
             self.redirect('/unit2/signup')
 
 app = webapp2.WSGIApplication([('/', MainPage),
+                               ('/unit2/blog/?', BlogFront),
+                               ('/unit2/blog/([0-9]+)', PostPage),
+                               ('/unit2/blog/newpost', NewPostBlog),
                                ('/unit2/asciichan', AsciiFront),
                                ('/unit2/rot13', Rot13Handler),
                                ('/unit2/signup', Signup),
