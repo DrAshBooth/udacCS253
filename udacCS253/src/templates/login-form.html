@@ -2,7 +2,7 @@
 
 <html>
   <head>
-    <title>Unit 3 Signup</title>
+    <title>Unit 3 Login</title>
     <style type="text/css">
       .label {text-align: right}
       .error {color: red}
@@ -11,7 +11,7 @@
   </head>
 
   <body>
-    <h2>Signup</h2>
+    <h2>Login</h2>
     <form method="post">
       <table>
         <tr>
@@ -37,30 +37,7 @@
             {{error_password}}
           </td>
         </tr>
-
-        <tr>
-          <td class="label">
-            Verify Password
-          </td>
-          <td>
-            <input type="password" name="verify" value="">
-          </td>
-          <td class="error">
-            {{error_verify}}
-          </td>
-        </tr>
-
-        <tr>
-          <td class="label">
-            Email (optional)
-          </td>
-          <td>
-            <input type="text" name="email" value="{{email}}">
-          </td>
-          <td class="error">
-            {{error_email}}
-          </td>
-        </tr>
+      
       </table>
 
       <input type="submit">
