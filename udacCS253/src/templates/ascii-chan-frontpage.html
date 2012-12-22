@@ -47,6 +47,11 @@
 			margin: 0;
 			font-size: 17px;
 		}
+		.map {
+			position: absolute;
+			right: 112px;
+			top: 112px;
+		}
 	</style>
 
 	<body>
@@ -67,6 +72,10 @@
 		
 		<input type="submit">
 	</form>
+	
+	{% if image_url %}
+	<img class="map" src="{{image_url}}">
+	{% endif %}
 	
 	<hr> 
 	

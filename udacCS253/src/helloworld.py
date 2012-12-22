@@ -13,6 +13,8 @@ import hashlib
 import hmac
 import random
 import string
+import urllib2 
+from xml.dom import minidom
 
 template_dir = os.path.join(os.path.dirname(__file__), 'templates')
 jinja_env = jinja2.Environment(loader=jinja2.FileSystemLoader(template_dir),
@@ -67,6 +69,7 @@ def users_key(group="default"):
 class Artwork(db.Model):
     title = db.StringProperty(required=True)
     art = db.TextProperty(required=True)
+    coords = db.GeoPtProperty()
     created = db.DateTimeProperty(auto_now_add=True)
     
 class Post(db.Model):
@@ -120,17 +123,22 @@ class BaseHandler(webapp2.RequestHandler):
     def write(self, *a, **kw):
         self.response.out.write(*a, **kw)
         
-class BlogHandler(webapp2.RequestHandler):
-    def render_str(self, template, **params):
-        t = jinja_env.get_template(template)
-        return t.render(params)
-    
-    def render(self, template, **kw):
-        self.response.out.write(self.render_str(template, **kw))
-
-    def write(self, *a, **kw):
-        self.response.out.write(*a, **kw)
+    def get_coords(self, ip):
+        IP_URL = "http://api.hostip.info/?ip="
+        url = IP_URL + ip
+        content = None
+        try:
+            content = urllib2.urlopen(url).read()
+        except:
+            return
+        if content:
+            m = minidom.parseString(content)
+            coords = m.getElementsByTagName('gml:coordinates')
+            if coords and coords[0].childNodes[0].nodeValue:
+                lon, lat = coords[0].childNodes[0].nodeValue.split(',')
+                return db.GeoPt(lat, lon)
         
+class BlogHandler(BaseHandler):
     def set_secure_cookie(self, name, val):
         cookie_val = make_secure_val(val)
         self.response.headers.add_header('Set-Cookie', "%s=%s; Path=/" % (name, cookie_val))
@@ -171,10 +179,28 @@ class MainPage(BaseHandler):
         the_string = self.request.get('text')
         self.write_form(the_string)
         
-class AsciiFront(BaseHandler): 
+class AsciiFront(BaseHandler):
+    def gmaps_img(self, points):
+        img_url = "http://maps.googleapis.com/maps/api/staticmap?size=380x263&sensor=false&"
+        if points:
+            for p in points:
+                img_url += "markers=%s,%s&" % (p.lat, p.lon)
+            img_url = img_url[:-1]
+            return img_url
+    
     def render_front(self, title="", art="", error=""):
         arts = db.GqlQuery("SELECT * FROM Artwork ORDER BY created DESC")
-        self.render("ascii-chan-frontpage.html", title=title, art=art, error=error, arts=arts)
+        # prevent the running of multiple queries
+        arts = list(arts)
+        # finds which arts have coords
+        points = filter(None, (a.coords for a in arts))
+        # if we have any arts coords, make an image url
+        image_url = None
+        if points:
+            image_url = self.gmaps_img(points)
+        # display the image url
+        self.render("ascii-chan-frontpage.html", title=title, art=art, error=error,
+                    arts=arts, image_url=image_url)
         
     def get(self):
         self.render_front()
@@ -184,6 +210,11 @@ class AsciiFront(BaseHandler):
         art = self.request.get("art")
         if title and art:
             a = Artwork(title=title, art=art)
+            # lookup users coordinates with ip
+            coords = self.get_coords(self.request.remote_addr)
+            # if we have coords add them to the art
+            if coords:
+                a.coords = coords
             a.put()
             self.redirect("/unit2/asciichan")
         else:
