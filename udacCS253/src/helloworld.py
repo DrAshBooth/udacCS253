@@ -15,6 +15,11 @@ import random
 import string
 import urllib2 
 from xml.dom import minidom
+import json
+import logging
+import datetime
+
+from google.appengine.api import memcache
 
 template_dir = os.path.join(os.path.dirname(__file__), 'templates')
 jinja_env = jinja2.Environment(loader=jinja2.FileSystemLoader(template_dir),
@@ -82,6 +87,14 @@ class Post(db.Model):
         self._render_text = self.content.replace('\n', '<br>')
         return render_str("post.html", p=self)
     
+    def as_dict(self):
+        time_fmt = '%c'
+        d = {'subject' : self.subject,
+             'content' : self.content,
+             'created' : self.created.strftime(time_fmt),
+             'last_modified' : self.last_modified.strftime(time_fmt) }
+        return d
+    
 class User(db.Model):
     name = db.StringProperty(required=True)
     pw_hash = db.StringProperty(required=True)
@@ -110,6 +123,43 @@ class User(db.Model):
         if u and valid_pw(name, pw, u.pw_hash):
             return u
 
+####### Memcache Stuff ###########
+
+def age_set(key, val):
+    save_time = datetime.datetime.utcnow()
+    memcache.set(key, (val, save_time))
+    
+def age_get(key):
+    r = memcache.get(key)
+    if r:
+        val, save_time = r
+        age = (datetime.datetime.utcnow() - save_time).total_seconds()
+    else:
+        val, age = None, 0
+    return val, age
+
+####### Blog functions ###########
+
+def add_post(post):
+    post.put()
+    get_posts(update=True)
+    return str(post.key().id())
+
+def get_posts(update=False):
+    q = Post.all().order('-created').fetch(limit=10)
+    mc_key = 'BLOGS'
+    posts, age = age_get(mc_key)
+    if update or posts is None:
+        posts = list(q)
+        age_set(mc_key, posts)
+    return posts, age
+
+def age_str(age):
+    s = 'queried %s seconds ago'
+    age = int(age)
+    if age == 1: s.replace('seconds', 'second')
+    return s % age
+
 ##################################
 
 class BaseHandler(webapp2.RequestHandler):
@@ -122,6 +172,11 @@ class BaseHandler(webapp2.RequestHandler):
 
     def write(self, *a, **kw):
         self.response.out.write(*a, **kw)
+        
+    def render_json(self, d):
+        json_txt = json.dumps(d)
+        self.response.headers['Content-Type'] = 'application/json; charset=UTF-8'
+        self.write(json_txt)
         
     def get_coords(self, ip):
         IP_URL = "http://api.hostip.info/?ip="
@@ -158,6 +213,10 @@ class BlogHandler(BaseHandler):
         uid = self.read_secure_cookie('user_id')
         self.user = uid and User.by_id(int(uid))
         
+        if self.request.url.endswith('.json'):
+            self.format = 'json'
+        else: self.format = 'html'
+        
 class MainPage(BaseHandler): 
     def get(self):
         self.response.headers['Content-Type'] = 'text/plain'
@@ -179,6 +238,17 @@ class MainPage(BaseHandler):
         the_string = self.request.get('text')
         self.write_form(the_string)
         
+def top_arts(update=False):
+    key = 'top'
+    arts = memcache.get(key)
+    if arts is None or update:
+        logging.error("DB QUERY")
+        arts = db.GqlQuery("SELECT * FROM Artwork ORDER BY created DESC")
+        # prevent the running of multiple queries
+        arts = list(arts)
+        memcache.set(key, arts)
+    return arts 
+        
 class AsciiFront(BaseHandler):
     def gmaps_img(self, points):
         img_url = "http://maps.googleapis.com/maps/api/staticmap?size=380x263&sensor=false&"
@@ -186,12 +256,10 @@ class AsciiFront(BaseHandler):
             for p in points:
                 img_url += "markers=%s,%s&" % (p.lat, p.lon)
             img_url = img_url[:-1]
-            return img_url
+            return img_url 
     
     def render_front(self, title="", art="", error=""):
-        arts = db.GqlQuery("SELECT * FROM Artwork ORDER BY created DESC")
-        # prevent the running of multiple queries
-        arts = list(arts)
+        arts = top_arts()
         # finds which arts have coords
         points = filter(None, (a.coords for a in arts))
         # if we have any arts coords, make an image url
@@ -216,27 +284,46 @@ class AsciiFront(BaseHandler):
             if coords:
                 a.coords = coords
             a.put()
+            # Re-run the query and update the cache
+            top_arts(update=True)
             self.redirect("/unit2/asciichan")
         else:
             error = "Must enter both a title ad some artwork!"
             self.render_front(title, art, error)
             
-class BlogFront(BaseHandler): 
+class BlogFront(BlogHandler): 
     def render_front(self):
-        posts = db.GqlQuery("SELECT * FROM Post ORDER BY created DESC limit 10")
-        self.render("blog-frontpage.html", posts=posts)
+        posts, age = get_posts()
+        if self.format == 'html':
+            self.render("blog-frontpage.html", posts=posts, age=age_str(age))
+        else:
+            return self.render_json([p.as_dict() for p in posts])
         
     def get(self):
         self.render_front()
         
-class PostPage(BaseHandler):
+class PostPage(BlogHandler):
     def get(self, post_id):
-        key = db.Key.from_path('Post', int(post_id), parent=blog_key())
-        post = db.get(key)
+        post_key = 'POST_' + post_id
+        post, age = age_get(post_key)
+        if not post:
+            key = db.Key.from_path('Post', int(post_id), parent=blog_key())
+            post = db.get(key)
+            age_set(post_key, post)
+            age = 0
         if not post:
             self.error(404)
             return
-        self.render("permalink.html", p=post)
+        if self.format == 'html':
+            self.render("permalink.html", post=post, age=age_str(age))
+        else:
+            self.render_json(post.as_dict())
+            
+class FlushHandler(BlogHandler):
+    def get(self):
+        memcache.flush_all()
+        self.redirect("/")
+    
 
 class NewPostBlog(BaseHandler):
     def render_form(self, subject="", content="", error=""):
@@ -251,7 +338,7 @@ class NewPostBlog(BaseHandler):
         if subject and content:
             b = Post(parent=blog_key(), subject=subject, content=content)
             b.put()
-            self.redirect('/unit2/blog/' + str(b.key().id()))
+            self.redirect('/' + str(b.key().id()))
         else:
             error = "Must enter both subject and content please!"
             self.render_form(subject, content, error)
@@ -327,14 +414,14 @@ class Signup(BlogHandler):
                 u = User.register(username, password, email)
                 u.put()
                 self.login(u)
-                self.redirect('/unit3/welcome')
+                self.redirect('/welcome')
 
 class Unit3Welcome(BlogHandler):
     def get(self):
         if self.user:
             self.render('welcome.html', username=self.user.name)
         else:
-            self.redirect('/unit3/blog/signup')
+            self.redirect('/signup')
             
 class Login(BlogHandler):
     def get(self):
@@ -345,7 +432,7 @@ class Login(BlogHandler):
         u = User.login(username, password)
         if u:
             self.login(u)
-            self.redirect('/unit3/welcome')
+            self.redirect('/welcome')
         else:
             msg = "Invalid Login!"
             self.render('login-form.html', error=msg)
@@ -353,18 +440,18 @@ class Login(BlogHandler):
 class Logout(BlogHandler):
     def get(self):
         self.logout()
-        self.redirect('/unit3/login')
+        self.redirect('/login')
 
-app = webapp2.WSGIApplication([('/', MainPage),
-                               ('/unit2/blog/?', BlogFront),
-                               ('/unit2/blog/([0-9]+)', PostPage),
-                               ('/unit2/blog/newpost', NewPostBlog),
+app = webapp2.WSGIApplication([('/?(?:\.json)?', BlogFront),
+                               ('/([0-9]+)(?:\.json)?', PostPage),
+                               ('/newpost', NewPostBlog),
+                               ('/signup', Signup),
+                               ('/flush', FlushHandler),
+                               ('/welcome', Unit3Welcome),
+                               ('/login', Login),
+                               ('/logout', Logout),
                                ('/unit2/asciichan', AsciiFront),
-                               ('/unit2/rot13', Rot13Handler),
-                               ('/unit3/signup', Signup),
-                               ('/unit3/welcome', Unit3Welcome),
-                               ('/unit3/login', Login),
-                               ('/unit3/logout', Logout)],
+                               ('/unit2/rot13', Rot13Handler)],
                               debug=True)
 
 def main():
