@@ -71,6 +71,15 @@ def blog_key(name="default"):
 def users_key(group="default"):
     return db.Key.from_path('users', group)
 
+# wiki stuff
+def Page_key(name='default'):
+    return db.Key.from_path('Pages', name)
+
+class Page(db.Model):
+    url = db.StringProperty(required=True)
+    content = db.TextProperty(required=True)
+    created = db.DateTimeProperty(auto_now_add=True)
+
 class Artwork(db.Model):
     title = db.StringProperty(required=True)
     art = db.TextProperty(required=True)
@@ -323,7 +332,6 @@ class FlushHandler(BlogHandler):
     def get(self):
         memcache.flush_all()
         self.redirect("/")
-    
 
 class NewPostBlog(BaseHandler):
     def render_form(self, subject="", content="", error=""):
@@ -441,7 +449,52 @@ class Logout(BlogHandler):
     def get(self):
         self.logout()
         self.redirect('/login')
+        
+class EditPage(BlogHandler):
+    def get(self, page_name):
+        if self.user:
+            self.render("edit.html")
+        else:
+            self.redirect("/login")
 
+    def post(self, page_name):
+        if not self.user:
+            self.redirect('/signup')
+        content = self.request.get('content')
+        if content:
+            p = Page(parent=Page_key(), url=page_name, content=content)
+            p.put()
+            self.redirect('%s' % str(page_name))
+        else:
+            error = "content, please!"
+            self.render("edit.html", content=content, error=error)
+            
+class WikiPage(BlogHandler):
+    def get(self, page_name):
+        ver = self.request.get("v")
+        if ver:
+            key = db.Key.from_path('Page', int(ver), parent=Page_key())
+            page = db.get(key)
+        else:
+            page = db.GqlQuery("SELECT * FROM Page WHERE url = :url ORDER BY created DESC LIMIT 1", url=page_name).get()
+        if page:
+            self.render('page.html', content=page.content, url=page_name)
+        if not page and self.user:
+            self.redirect('/_edit' + page_name)
+        if not page and not self.user:
+            self.redirect('/login')
+            
+class HistoryPage(BlogHandler):
+    def get(self, page_name):
+        pages = Page.all().filter("url =", page_name).order("-created")
+        if pages:
+            self.render('page_history.html', pages=pages)
+        if not pages and self.user:
+            self.redirect('/_edit' + page_name)
+        if not pages and not self.user:
+            self.redirect('/login')
+
+PAGE_RE = r'(/(?:[a-zA-Z0-9_-]+/?)*)'
 app = webapp2.WSGIApplication([('/?(?:\.json)?', BlogFront),
                                ('/([0-9]+)(?:\.json)?', PostPage),
                                ('/newpost', NewPostBlog),
@@ -450,6 +503,9 @@ app = webapp2.WSGIApplication([('/?(?:\.json)?', BlogFront),
                                ('/welcome', Unit3Welcome),
                                ('/login', Login),
                                ('/logout', Logout),
+                               ('/_edit' + PAGE_RE, EditPage),
+                               ('/_history' + PAGE_RE, HistoryPage),
+                               (PAGE_RE, WikiPage),
                                ('/unit2/asciichan', AsciiFront),
                                ('/unit2/rot13', Rot13Handler)],
                               debug=True)
